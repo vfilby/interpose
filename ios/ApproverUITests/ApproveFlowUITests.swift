@@ -100,6 +100,8 @@ final class ApproveFlowUITests: XCTestCase {
         XCTAssertTrue(hold.waitForExistence(timeout: 5))
         hold.tap()
         XCTAssertFalse(app.staticTexts["approved (confirmed by demo)"].waitForExistence(timeout: 3), "a tap approved a high-risk request")
+        hold.press(forDuration: 0.6)
+        XCTAssertFalse(app.staticTexts["approved (confirmed by demo)"].waitForExistence(timeout: 3), "a hold cut short approved a high-risk request")
         hold.press(forDuration: 2.5)
         XCTAssertTrue(app.staticTexts["approved (confirmed by demo)"].waitForExistence(timeout: 20), "hold did not approve")
         attach(app, "approved-high")

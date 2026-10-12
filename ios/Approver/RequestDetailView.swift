@@ -105,18 +105,21 @@ struct RequestDetailView: View {
 
 /// The second deliberate gesture for high-risk approvals: press and hold until the bar fills.
 ///
-/// The fill animation is the timer: the action runs when it completes, so the bar is full before Face ID comes up.
-/// Once it has fired the bar stays full while `busy` (the parent acting on the confirmation) and empties when that
-/// clears, so a failed or cancelled Face ID leaves the button ready for another hold.
+/// The fill is drawn from the wall clock (how long the finger has been down over `duration`), and the action fires from
+/// a timer started at the same instant, so what the bar shows and when it fires cannot drift apart. Nothing here
+/// depends on a SwiftUI animation running: the earlier version animated the fill with `withAnimation` from the button's
+/// press tracking, and on the phone that animation did not run, so the bar went red at once instead of filling. A
+/// release before `duration` empties the bar and cancels the timer. Once it has fired the bar stays full while `busy` (the parent acting on the
+/// confirmation) and empties when that clears, so a failed or cancelled Face ID leaves the button ready for another
+/// hold.
 struct HoldToConfirmButton: View {
     let title: String
     var busy = false
     var duration: Double = 1.5
     let action: () -> Void
-    @State private var pressing = false
+    @State private var pressStart: Date? // set while the finger is down
     @State private var confirmed = false
-    @State private var fill: CGFloat = 0
-    @State private var hold = 0 // one per press, so a cut-short hold's animation completion is ignored
+    @State private var timer: Task<Void, Never>?
 
     var body: some View {
         Button {} label: {
@@ -126,10 +129,12 @@ struct HoldToConfirmButton: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
                 .background {
-                    GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Color.red.opacity(0.45)
-                            Color.red.frame(width: fill * g.size.width)
+                    TimelineView(.animation(paused: pressStart == nil)) { context in
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Color.red.opacity(0.45)
+                                Color.red.frame(width: fill(at: context.date) * g.size.width)
+                            }
                         }
                     }
                 }
@@ -139,32 +144,32 @@ struct HoldToConfirmButton: View {
         .buttonStyle(PressTracking(onPress: pressChanged))
         .accessibilityHint("Press and hold to approve")
         .onChange(of: busy) { _, busy in
-            if !busy { reset() }
+            if !busy { confirmed = false }
         }
+    }
+
+    private func fill(at now: Date) -> CGFloat {
+        if confirmed { return 1 }
+        guard let start = pressStart else { return 0 }
+        return CGFloat(min(1, max(0, now.timeIntervalSince(start) / duration)))
     }
 
     private func pressChanged(_ down: Bool) {
-        pressing = down
+        timer?.cancel()
+        timer = nil
         guard !confirmed else { return }
         if down {
-            hold += 1
-            let h = hold
-            withAnimation(.linear(duration: duration), completionCriteria: .logicallyComplete) {
-                fill = 1
-            } completion: {
-                // Also called when a release cuts the hold short: the emptying animation replaces this one.
-                guard h == hold, pressing, !confirmed else { return }
+            pressStart = .now
+            timer = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(duration))
+                guard !Task.isCancelled, pressStart != nil, !confirmed else { return }
                 confirmed = true
+                pressStart = nil
                 action()
             }
         } else {
-            withAnimation(.easeOut(duration: 0.2)) { fill = 0 }
+            pressStart = nil
         }
-    }
-
-    private func reset() {
-        confirmed = false
-        withAnimation(.easeOut(duration: 0.2)) { fill = 0 }
     }
 }
 

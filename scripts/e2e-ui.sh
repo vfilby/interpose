@@ -1,6 +1,6 @@
 #!/bin/bash
 # End to end with the real app in the iOS simulator: hub + demo adapter on loopback, XCUITest taps Approve.
-# Needs: xcodegen, Xcode, an "iPhone 17 Pro" iOS 26.4 simulator (edit DEST for another).
+# Needs: xcodegen, Xcode, an "iPhone 17 Pro" iOS 26.4 simulator (DEST for another; SIM=<udid> when several are booted).
 # Run from anywhere; builds the Go commands into a temp dir. Uses its own loopback ports 18740 (hub API), 18741 (management UI)
 # and 18749 (demo source), so it never touches a hub you are running on the default ports; it stops if they are busy.
 # It UNINSTALLS the Approver app from the booted simulator and resets the simulator keychain: any enrollment you made
@@ -17,6 +17,7 @@ for p in 18740 18741 18749; do
 done
 IOS="$ROOT/ios"
 DEST=${DEST:-"platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4"}
+SIM=${SIM:-booted}  # for simctl: "booted" is ambiguous when more than one simulator is up
 (cd "$IOS" && xcodegen generate -q && xcodebuild -project Approver.xcodeproj -scheme Approver -destination "$DEST" \
   -derivedDataPath build build-for-testing CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual -quiet)
 
@@ -50,8 +51,8 @@ ANN_ACCOUNT=$("$B/interpose-device" enroll -f ann.json "$(newlink ann new)" | aw
     done
   done ) > ann.log 2>&1 &
 ANN=$!
-xcrun simctl uninstall booted com.eff3.interloper 2>/dev/null || true
-xcrun simctl keychain booted reset  # the simulator keychain outlives an uninstall: start unenrolled
+xcrun simctl uninstall "$SIM" com.eff3.interloper 2>/dev/null || true
+xcrun simctl keychain "$SIM" reset  # the simulator keychain outlives an uninstall: start unenrolled
 
 echo "== starting UI test"
 ( cd "$IOS" && TEST_RUNNER_INTERPOSE_ADMIN_URL="http://127.0.0.1:18741" TEST_RUNNER_INTERPOSE_ANN_ACCOUNT="$ANN_ACCOUNT" xcodebuild -project Approver.xcodeproj -scheme Approver \
