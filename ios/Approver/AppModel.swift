@@ -29,13 +29,6 @@ enum Membership: Equatable {
     case removed   // was a member, no longer is
 }
 
-struct Decided: Identifiable, Equatable {
-    var id: String
-    var title: String
-    var approve: Bool
-    var at: Date
-}
-
 @MainActor
 final class AppModel: ObservableObject {
     let keys: KeyStore = defaultKeyStore()
@@ -62,6 +55,7 @@ final class AppModel: ObservableObject {
     private(set) var seen: [String: OpenedRequest] = [:]
     @Published private(set) var refused: [String] = []
     @Published private(set) var outcomes: [String: Outcome] = [:]
+    /// Decisions this device sent, newest first, kept on disk (DecidedStore) so the list survives a relaunch.
     @Published private(set) var decided: [Decided] = []
     @Published var lastError: String?
     @Published var pendingLink: EnrollmentLink?
@@ -100,6 +94,7 @@ final class AppModel: ObservableObject {
     private let secrets = KeychainStorage()
     private var pinStore: PinStore { PinStore(storage: secrets) }
     private let defaults = UserDefaults.standard
+    private let decidedStore = DecidedStore()
     /// Hashes of the decisions sent per request, oldest first: a note counts only for the latest one.
     private var sentHashes: [String: [String]] = [:]
     private var ackSince: Int64 = 0
@@ -118,6 +113,7 @@ final class AppModel: ObservableObject {
         hubURL = defaults.url(forKey: "hubURL")
         token = (try? secrets.get("hub.token")).flatMap { String(data: $0, encoding: .utf8) }
         user = defaults.string(forKey: "user")
+        decided = decidedStore.load()
         do {
             try pinStore.migrate(from: defaults)
             adapters = try pinStore.load(.adapters) ?? []
@@ -448,6 +444,10 @@ final class AppModel: ObservableObject {
             if outcomes[key]?.isFinal == true { continue }
             if ack.isFinal {
                 outcomes[key] = .final(ack)
+                if let i = decided.firstIndex(where: { $0.id == key }), decided[i].settled != ack {
+                    decided[i].settled = ack
+                    saveDecided()
+                }
             } else if let latest = sentHashes[key]?.last, ack.decisionHash == latest {
                 outcomes[key] = .note(ack)
             }
@@ -473,6 +473,8 @@ final class AppModel: ObservableObject {
             outcomes[req.id] = .sent
             decided.removeAll { $0.id == req.id }
             decided.insert(Decided(id: req.id, title: req.record.title, approve: approve, at: Date()), at: 0)
+            decided = Array(decided.prefix(DecidedStore.limit))
+            saveDecided()
             // The adapter usually answers within a second or two: poll quickly for the ack instead of waiting for the
             // regular 5 s cycle.
             for _ in 0..<15 {
@@ -483,6 +485,11 @@ final class AppModel: ObservableObject {
         } catch {
             outcomes[req.id] = .failed(error.localizedDescription)
         }
+    }
+
+    /// A failed write is not worth a banner: the list is still right for this run and is written again next time.
+    private func saveDecided() {
+        try? decidedStore.save(decided)
     }
 
     // MARK: the approve key
@@ -645,6 +652,7 @@ final class AppModel: ObservableObject {
         refused = []
         outcomes = [:]
         decided = []
+        decidedStore.delete()
         sentHashes = [:]
         ackSince = 0
         user = nil

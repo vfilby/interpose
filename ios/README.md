@@ -112,6 +112,9 @@ password, the PIN failure count and the hub token.
 The pins (account fingerprint, adapter keys, the last accepted roster head) are in the Keychain too, this device only,
 so a restored or edited backup cannot carry or change them. Older versions kept them in UserDefaults; they are moved on
 first launch.
+The "Decided here" list (the last 50 decisions this device sent: request title, approve or deny, and the verified final
+ack once it arrived) is a JSON file in Application Support, readable only while the phone is unlocked and not backed up,
+so it survives the app being killed and goes with the hub when you leave or reset.
 
 **Adapter keys** the hub lists are not pinned on first sight either: the inbox shows each new adapter with its
 fingerprint under "New adapters", and its requests wait until you compare that with what the adapter prints
