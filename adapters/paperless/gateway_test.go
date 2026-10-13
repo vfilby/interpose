@@ -29,12 +29,13 @@ type fakePaperless struct {
 	t  *testing.T
 	mu sync.Mutex
 
-	docs  []ppapi.Document
-	tags  []ppapi.Named
-	corrs []ppapi.Named
-	text  map[int]string // content by id
-	tasks map[string]ppapi.Task
-	next  int
+	docs    []ppapi.Document
+	tags    []ppapi.Named
+	corrs   []ppapi.Named
+	patched []int
+	text    map[int]string // content by id
+	tasks   map[string]ppapi.Task
+	next    int
 	// consume: what the next upload becomes (nil: a new document with the given title)
 	fail string
 
@@ -129,6 +130,49 @@ func (f *fakePaperless) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(d)
 				return
 			}
+		}
+		w.WriteHeader(404)
+	case r.Method == "PATCH" && strings.HasPrefix(r.URL.Path, "/api/documents/"):
+		id, _ := strconv.Atoi(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/documents/"), "/"))
+		var fields map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		for i := range f.docs {
+			if f.docs[i].ID != id {
+				continue
+			}
+			d := &f.docs[i]
+			if v, ok := fields["title"]; ok {
+				d.Title = v.(string)
+			}
+			if v, ok := fields["created"]; ok {
+				d.Created = v.(string)
+			}
+			if v, ok := fields["correspondent"]; ok {
+				d.Correspondent = nil
+				if v != nil {
+					n := int(v.(float64))
+					d.Correspondent = &n
+				}
+			}
+			if v, ok := fields["document_type"]; ok {
+				d.DocumentType = nil
+				if v != nil {
+					n := int(v.(float64))
+					d.DocumentType = &n
+				}
+			}
+			if v, ok := fields["tags"]; ok {
+				d.Tags = nil
+				for _, t := range v.([]any) {
+					d.Tags = append(d.Tags, int(t.(float64)))
+				}
+			}
+			f.patched = append(f.patched, id)
+			json.NewEncoder(w).Encode(*d)
+			return
 		}
 		w.WriteHeader(404)
 	case r.Method == "POST" && r.URL.Path == "/api/documents/post_document/":
@@ -252,7 +296,11 @@ func newHarness(t *testing.T) *harness {
 	if _, err := agents.Add("jeeves"); err != nil {
 		t.Fatal(err)
 	}
-	h.gw = &Gateway{PP: ppapi.New(pp.URL, "pp-secret", nil), Store: store, Agents: agents, PublicURL: "https://paperless.home.example/",
+	uploads, err := OpenUploads(filepath.Join(t.TempDir(), "uploads.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.gw = &Gateway{PP: ppapi.New(pp.URL, "pp-secret", nil), Store: store, Agents: agents, Uploads: uploads, PublicURL: "https://paperless.home.example/",
 		Now: now, MaxWait: 2 * time.Second, UploadWait: time.Second}
 	h.src = &Source{Store: store}
 	h.srv = httptest.NewServer(h.gw)
@@ -736,5 +784,70 @@ func TestCreateNames(t *testing.T) {
 	}
 	if code, _, _ := h.do("POST", "/v1/document_types", strings.NewReader(`{"name":"x"}`), "application/json", ""); code != 405 {
 		t.Errorf("document types must not be creatable: %d", code)
+	}
+}
+
+func TestEditOwnUploads(t *testing.T) {
+	h := newHarness(t)
+	// A document the agent did not add cannot be changed, lease or no lease.
+	code, _, raw := h.do("PATCH", "/v1/documents/3", strings.NewReader(`{"title":"x"}`), "application/json", "")
+	if code != 403 || !strings.Contains(string(raw), "you added") {
+		t.Fatalf("edit of someone else's document: %d %s", code, raw)
+	}
+	// Its own upload: re-file it with a correspondent, type, date and tags.
+	code, out, raw := upload(t, h, "folio", nil)
+	if code != 201 {
+		t.Fatalf("upload: %d %s", code, raw)
+	}
+	id := int(out["document"].(map[string]any)["id"].(float64))
+	_, list, _ := h.do("GET", "/v1/uploads", nil, "", "")
+	_ = list
+	code, out, raw = h.do("PATCH", "/v1/documents/"+strconv.Itoa(id),
+		strings.NewReader(`{"title":"Delta Hotels 2026-10-01","created":"2026-10-01","correspondent":"insurance co","document_type":"Invoice","tags":["receipt"]}`),
+		"application/json", "")
+	if code != 200 {
+		t.Fatalf("edit: %d %s", code, raw)
+	}
+	if out["title"] != "Delta Hotels 2026-10-01" || out["correspondent"] != "Insurance Co" || out["document_type"] != "Invoice" || out["created"] != "2026-10-01" {
+		t.Errorf("after edit: %v", out)
+	}
+	if tags := out["tags"].([]any); len(tags) != 1 || tags[0] != "receipt" {
+		t.Errorf("tags: %v", tags)
+	}
+	// add_tags extends; tags replaces; a blank correspondent clears it.
+	code, out, raw = h.do("PATCH", "/v1/documents/"+strconv.Itoa(id), strings.NewReader(`{"add_tags":["2026"],"correspondent":""}`), "application/json", "")
+	if code != 200 {
+		t.Fatalf("add_tags: %d %s", code, raw)
+	}
+	if tags := out["tags"].([]any); len(tags) != 2 {
+		t.Errorf("tags after add: %v", tags)
+	}
+	if _, has := out["correspondent"]; has {
+		t.Errorf("correspondent not cleared: %v", out)
+	}
+	// Bad asks.
+	for _, body := range []string{`{}`, `{"created":"soon"}`, `{"tags":["nope"]}`, `{"title":""}`} {
+		if code, _, raw := h.do("PATCH", "/v1/documents/"+strconv.Itoa(id), strings.NewReader(body), "application/json", ""); code != 400 {
+			t.Errorf("%s: %d %s", body, code, raw)
+		}
+	}
+	// Another agent cannot touch it; the list shows only one's own.
+	jeeves := newHarnessToken(t, h, "jeeves2")
+	r, _ := http.NewRequest("PATCH", h.srv.URL+"/v1/documents/"+strconv.Itoa(id), strings.NewReader(`{"title":"x"}`))
+	r.Header.Set("Authorization", "Bearer "+jeeves)
+	r.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(r)
+	resp.Body.Close()
+	if resp.StatusCode != 403 {
+		t.Errorf("another agent's edit: %d", resp.StatusCode)
+	}
+	_, _, raw = h.do("GET", "/v1/uploads", nil, "", "")
+	if !strings.Contains(string(raw), `"id": `+strconv.Itoa(id)) {
+		t.Errorf("own uploads: %s", raw)
+	}
+	// Persisted: a reloaded record still knows the owner.
+	again, err := OpenUploads(h.gw.Uploads.path)
+	if err != nil || !again.Owns("maggy", id) || again.Owns("jeeves2", id) {
+		t.Errorf("reloaded uploads: %v %v", again, err)
 	}
 }

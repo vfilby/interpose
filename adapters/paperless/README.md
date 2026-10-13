@@ -44,7 +44,10 @@ What a lease allows, and what the gateway checks on every read:
 | **documents** | one is served only if Paperless lists it under the scope's own filter (`id__in` plus the scope), then it is charged to the budget, once |
 | **agent** | a lease belongs to the agent that asked; another agent's token cannot use it |
 
-Writes other than adding a document (edit, delete, tag) do not exist here, by design.
+The only other writes are on an agent's **own uploads** (the gateway keeps the list in `uploads.json`): it may change
+their title, date, correspondent, document type and tags, without a lease, since filing them well is part of adding
+them. Adding tags and correspondents is open to every agent (an existing name is reused, never duplicated).
+Changing any other document, and deleting anything, do not exist here, by design.
 
 ## What the phone shows
 
@@ -71,6 +74,8 @@ All calls carry `Authorization: Bearer <agent token>`; answers are JSON unless n
 | `GET /v1/documents` | search within the lease: `q` (full text), `correspondent`, `document_type`, `tags`, `created_after`, `created_before`, `ordering`, `page`, `page_size` (≤100). Listings carry no content |
 | `GET /v1/documents/{id}` | the document with its text (`content`) and `url`; charged to the lease |
 | `GET /v1/documents/{id}/file` | its original file (binary, `Content-Disposition`); the same document, not charged again |
+| `GET /v1/uploads` | the documents this agent added (`[{id, url}]`, newest first) |
+| `PATCH /v1/documents/{id}` | re-file one of this agent's own uploads, no lease: `{title, created, correspondent, document_type, tags, add_tags}` (names; `tags` replaces the set, `add_tags` extends it; an empty `correspondent`/`document_type` clears it). **403** for any document the agent did not add. Answers with the document as it is now |
 
 A lease's `status` is `pending`, `approved`, `denied` (with `deny_reason`) or `expired`. Refusals are 403 with a
 one-line `error`: no lease, not approved, expired, budget spent, outside the scope.
@@ -86,8 +91,10 @@ files (signing key, hub token, trust list, open records, `audit.jsonl`) plus `le
 ## The credential
 
 A Paperless user of its own (for example `interpose-gateway`), **not** a superuser, with these permissions and no
-others: `Document: add, view`; `Tag`, `Correspondent`: `add, view`; `Document type`, `Paperless task`: `view`. A
-missing one shows in the log as a 403 naming the path. Its API token (`manage.py drf_create_token <user>`, or My
+others: `Document: add, change, view`; `Tag`, `Correspondent`: `add, view`; `Document type`, `Paperless task`:
+`view`. A missing one shows in the log as a 403 naming the path. `change` is only ever used on documents the gateway
+itself added; if a Paperless workflow reassigns those to a person on upload, it must also grant this user *change*
+on them (the workflow's assignment action can), or edits come back 403. Its API token (`manage.py drf_create_token <user>`, or My
 profile → API auth token) goes in `secrets/paperless-token`.
 
 Paperless's object permissions apply: the user sees documents that have no owner, that it owns, or that are shared with

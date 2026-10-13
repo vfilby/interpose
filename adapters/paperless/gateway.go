@@ -32,6 +32,7 @@ type Paperless interface {
 	Documents(ctx context.Context, q url.Values) (ppapi.Page, error)
 	Document(ctx context.Context, id int) (ppapi.Document, error)
 	Download(ctx context.Context, id int) (io.ReadCloser, string, string, error)
+	Patch(ctx context.Context, id int, fields map[string]any) (ppapi.Document, error)
 	Post(ctx context.Context, up ppapi.Upload, file io.Reader) (string, error)
 	Task(ctx context.Context, taskID string) (ppapi.Task, bool, error)
 }
@@ -45,6 +46,9 @@ type Paperless interface {
 //	POST /v1/documents                                           upload (multipart: file, title, created, correspondent,
 //	                                                             document_type, tags, asn); ?wait= for the result
 //	GET  /v1/uploads/{task}                                      the result of an upload still consuming; ?wait=
+//	GET  /v1/uploads                                             the documents this agent added (ids, newest first)
+//	PATCH /v1/documents/{id}                                     change title, created, correspondent, document_type,
+//	                                                             tags of a document this agent added; no lease needed
 //	POST /v1/leases                                              ask for a read lease (JSON: scope, duration,
 //	                                                             max_documents, reason)
 //	GET  /v1/leases | /v1/leases/{id}                            this agent's leases; ?wait= blocks while pending
@@ -55,6 +59,8 @@ type Gateway struct {
 	PP     Paperless
 	Store  *Store
 	Agents *Agents
+	// Uploads remembers what each agent added, which it may then re-file. nil: no edits at all.
+	Uploads *Uploads
 	// PublicURL is Paperless as people open it (https://paperless.home.example): links in answers point there.
 	PublicURL string
 	// Access is where every call that touched a document is recorded. nil: not recorded.
@@ -144,6 +150,8 @@ func (g *Gateway) init() {
 	m.Handle("GET /v1/documents", g.auth(g.search))
 	m.Handle("GET /v1/documents/{id}", g.auth(g.document))
 	m.Handle("GET /v1/documents/{id}/file", g.auth(g.file))
+	m.Handle("GET /v1/uploads", g.auth(g.myUploads))
+	m.Handle("PATCH /v1/documents/{id}", g.auth(g.edit))
 	g.mux = m
 }
 
@@ -558,6 +566,9 @@ func (g *Gateway) taskResult(w http.ResponseWriter, r *http.Request, agent, task
 			}
 			d.Content = ""
 			g.record("upload.done", agent, "", "doc:"+strconv.Itoa(id), t.TaskFileName)
+			if g.Uploads != nil {
+				g.Uploads.Add(agent, id, g.now())
+			}
 			reply(w, okCode, map[string]any{"status": "done", "task": task, "document": g.view(ctx, d)})
 			return
 		case found && t.Status == ppapi.TaskFailure:
@@ -927,6 +938,146 @@ func (g *Gateway) search(w http.ResponseWriter, r *http.Request, agent string) {
 	}
 	g.record("search", agent, l.ID, q.Get("query"), fmt.Sprintf("%d results, page %d", p.Count, page))
 	reply(w, http.StatusOK, map[string]any{"count": p.Count, "page": page, "page_size": size, "more": p.Next != nil, "results": out})
+}
+
+// ---- an agent's own uploads
+
+func (g *Gateway) myUploads(w http.ResponseWriter, _ *http.Request, agent string) {
+	ids := []int{}
+	if g.Uploads != nil {
+		ids = g.Uploads.List(agent)
+	}
+	out := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, map[string]any{"id": id, "url": g.docURL(id)})
+	}
+	reply(w, http.StatusOK, out)
+}
+
+// editAsk is what an agent may change on a document it added. A nil field is left alone; tags replace the set,
+// add_tags extends it.
+type editAsk struct {
+	Title         *string  `json:"title"`
+	Created       *string  `json:"created"`
+	Correspondent *string  `json:"correspondent"`
+	DocumentType  *string  `json:"document_type"`
+	Tags          []string `json:"tags"`
+	AddTags       []string `json:"add_tags"`
+}
+
+func (g *Gateway) edit(w http.ResponseWriter, r *http.Request, agent string) {
+	id, ok := g.docID(w, r)
+	if !ok {
+		return
+	}
+	if g.Uploads == nil || !g.Uploads.Owns(agent, id) {
+		g.record("refused", agent, "", "doc:"+strconv.Itoa(id), "edit of a document this agent did not add")
+		fail(w, http.StatusForbidden, "only a document you added through this gateway can be changed; ask the person to fix others in Paperless")
+		return
+	}
+	var ask editAsk
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&ask); err != nil {
+		fail(w, http.StatusBadRequest, "JSON body: "+err.Error())
+		return
+	}
+	ctx := r.Context()
+	fields := map[string]any{}
+	var changes []string
+	if ask.Title != nil {
+		t := protocol.CleanText(*ask.Title, maxTitle)
+		if t == "" {
+			fail(w, http.StatusBadRequest, "title: must not be empty")
+			return
+		}
+		fields["title"] = t
+		changes = append(changes, "title="+t)
+	}
+	if ask.Created != nil {
+		if !isoDate.MatchString(strings.TrimSpace(*ask.Created)) {
+			fail(w, http.StatusBadRequest, "created: YYYY-MM-DD")
+			return
+		}
+		fields["created"] = strings.TrimSpace(*ask.Created)
+		changes = append(changes, "created="+fields["created"].(string))
+	}
+	if ask.Correspondent != nil {
+		if strings.TrimSpace(*ask.Correspondent) == "" {
+			fields["correspondent"] = nil
+			changes = append(changes, "correspondent=none")
+		} else {
+			cid, err := g.resolve(ctx, "correspondents", *ask.Correspondent)
+			if err != nil {
+				g.upstream(w, "correspondents", err)
+				return
+			}
+			if cid == 0 {
+				fail(w, http.StatusBadRequest, "correspondent: no such name (GET /v1/correspondents lists them; POST adds one)")
+				return
+			}
+			fields["correspondent"] = cid
+			changes = append(changes, "correspondent="+*ask.Correspondent)
+		}
+	}
+	if ask.DocumentType != nil {
+		if strings.TrimSpace(*ask.DocumentType) == "" {
+			fields["document_type"] = nil
+			changes = append(changes, "document_type=none")
+		} else {
+			tid, err := g.resolve(ctx, "document_types", *ask.DocumentType)
+			if err != nil {
+				g.upstream(w, "document_types", err)
+				return
+			}
+			if tid == 0 {
+				fail(w, http.StatusBadRequest, "document_type: no such name (GET /v1/document_types lists them)")
+				return
+			}
+			fields["document_type"] = tid
+			changes = append(changes, "document_type="+*ask.DocumentType)
+		}
+	}
+	if ask.Tags != nil || len(ask.AddTags) > 0 {
+		var ids []int
+		if ask.Tags == nil { // extending: start from what the document has
+			d, err := g.PP.Document(ctx, id)
+			if err != nil {
+				g.upstream(w, "document", err)
+				return
+			}
+			ids = slices.Clone(d.Tags)
+		}
+		for _, t := range append(splitNames(ask.Tags), splitNames(ask.AddTags)...) {
+			tid, err := g.resolve(ctx, "tags", t)
+			if err != nil {
+				g.upstream(w, "tags", err)
+				return
+			}
+			if tid == 0 {
+				fail(w, http.StatusBadRequest, fmt.Sprintf("tags: no tag %q (GET /v1/tags lists them; POST adds one)", t))
+				return
+			}
+			if !slices.Contains(ids, tid) {
+				ids = append(ids, tid)
+			}
+		}
+		if ids == nil {
+			ids = []int{}
+		}
+		fields["tags"] = ids
+		changes = append(changes, "tags="+ints(ids))
+	}
+	if len(fields) == 0 {
+		fail(w, http.StatusBadRequest, "nothing to change: give title, created, correspondent, document_type, tags or add_tags")
+		return
+	}
+	d, err := g.PP.Patch(ctx, id, fields)
+	if err != nil {
+		g.upstream(w, "edit", err)
+		return
+	}
+	g.record("edit", agent, "", "doc:"+strconv.Itoa(id), strings.Join(changes, "; "))
+	g.log().Info("edit", "agent", agent, "doc", id, "changes", strings.Join(changes, "; "))
+	reply(w, http.StatusOK, g.view(ctx, d))
 }
 
 func (g *Gateway) docID(w http.ResponseWriter, r *http.Request) (int, bool) {
