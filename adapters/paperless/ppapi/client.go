@@ -193,6 +193,32 @@ func (c *Client) DocumentTypes(ctx context.Context) ([]Named, error) {
 	return c.all(ctx, "/api/document_types/")
 }
 
+// create adds a named object (a tag or a correspondent) and returns it as Paperless stored it.
+func (c *Client) create(ctx context.Context, path, name string) (Named, error) {
+	body, _ := json.Marshal(map[string]string{"name": name})
+	resp, err := c.req(ctx, http.MethodPost, path, nil, bytes.NewReader(body), "application/json")
+	if err != nil {
+		return Named{}, err
+	}
+	defer resp.Body.Close()
+	var n Named
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSON)).Decode(&n); err != nil {
+		return Named{}, fmt.Errorf("Paperless: %s: %w", path, err)
+	}
+	if n.ID == 0 {
+		return Named{}, fmt.Errorf("Paperless: %s: no id in the answer", path)
+	}
+	return n, nil
+}
+
+func (c *Client) CreateTag(ctx context.Context, name string) (Named, error) {
+	return c.create(ctx, "/api/tags/", name)
+}
+
+func (c *Client) CreateCorrespondent(ctx context.Context, name string) (Named, error) {
+	return c.create(ctx, "/api/correspondents/", name)
+}
+
 // Documents lists documents matching q (Paperless's own filter parameters), without content.
 func (c *Client) Documents(ctx context.Context, q url.Values) (Page, error) {
 	q = clone(q)

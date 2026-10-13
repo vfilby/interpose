@@ -62,6 +62,7 @@ All calls carry `Authorization: Bearer <agent token>`; answers are JSON unless n
 |---|---|
 | `GET /healthz` | `ok` (no token) |
 | `GET /v1/tags`, `/v1/correspondents`, `/v1/document_types` | `[{id, name}]`, no lease: needed to file well and to ask for a well-scoped lease |
+| `POST /v1/tags`, `/v1/correspondents` | `{name}`: add one, no lease. **201** `{id, name, existing: false}`; a name Paperless already has (any case) comes back **200** with `existing: true`, never duplicated. Document types are not creatable |
 | `POST /v1/documents` | multipart: `file` (required), `title`, `created` (YYYY-MM-DD), `correspondent`, `document_type`, `tags` (names, repeated or comma-separated), `asn`. `?wait=` (default 90s) waits for consumption. **201** `{status: done, document: {id, title, url, …}}`; **202** `{status: pending, task, poll}` when still consuming; **409** `{status: duplicate, document: {id, url}}`; **422** `{status: failed, error}` |
 | `GET /v1/uploads/{task}` | the same answer for an upload that was still consuming; `?wait=` |
 | `POST /v1/leases` | `{scope: {correspondent, document_type, tags: [], query, documents: []}, duration: "2h", max_documents: 20, reason: "…"}` (`reason` required). **202** with the lease, `status: pending` |
@@ -85,7 +86,8 @@ files (signing key, hub token, trust list, open records, `audit.jsonl`) plus `le
 ## The credential
 
 A Paperless user of its own (for example `interpose-gateway`), **not** a superuser, with these permissions and no
-others: `Document: add, view`; `Tag`, `Correspondent`, `Document type`, `Paperless task`: `view`. Its API token (My
+others: `Document: add, view`; `Tag`, `Correspondent`: `add, view`; `Document type`, `Paperless task`: `view`. A
+missing one shows in the log as a 403 naming the path. Its API token (`manage.py drf_create_token <user>`, or My
 profile → API auth token) goes in `secrets/paperless-token`.
 
 Paperless's object permissions apply: the user sees documents that have no owner, that it owns, or that are shared with

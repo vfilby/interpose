@@ -27,6 +27,8 @@ type Paperless interface {
 	Tags(ctx context.Context) ([]ppapi.Named, error)
 	Correspondents(ctx context.Context) ([]ppapi.Named, error)
 	DocumentTypes(ctx context.Context) ([]ppapi.Named, error)
+	CreateTag(ctx context.Context, name string) (ppapi.Named, error)
+	CreateCorrespondent(ctx context.Context, name string) (ppapi.Named, error)
 	Documents(ctx context.Context, q url.Values) (ppapi.Page, error)
 	Document(ctx context.Context, id int) (ppapi.Document, error)
 	Download(ctx context.Context, id int) (io.ReadCloser, string, string, error)
@@ -39,6 +41,7 @@ type Paperless interface {
 //
 //	GET  /healthz
 //	GET  /v1/tags | /v1/correspondents | /v1/document_types     names, for filing and for asking well-scoped leases
+//	POST /v1/tags | /v1/correspondents                          add a name (JSON {name}); an existing one is returned
 //	POST /v1/documents                                           upload (multipart: file, title, created, correspondent,
 //	                                                             document_type, tags, asn); ?wait= for the result
 //	GET  /v1/uploads/{task}                                      the result of an upload still consuming; ?wait=
@@ -131,6 +134,8 @@ func (g *Gateway) init() {
 	m.Handle("GET /v1/tags", g.auth(g.named("tags")))
 	m.Handle("GET /v1/correspondents", g.auth(g.named("correspondents")))
 	m.Handle("GET /v1/document_types", g.auth(g.named("document_types")))
+	m.Handle("POST /v1/tags", g.auth(g.createNamed("tags")))
+	m.Handle("POST /v1/correspondents", g.auth(g.createNamed("correspondents")))
 	m.Handle("POST /v1/documents", g.auth(g.upload))
 	m.Handle("GET /v1/uploads/{task}", g.auth(g.uploadResult))
 	m.Handle("POST /v1/leases", g.auth(g.askLease))
@@ -319,6 +324,56 @@ func (g *Gateway) named(kind string) handler {
 			list = []ppapi.Named{}
 		}
 		reply(w, http.StatusOK, list)
+	}
+}
+
+const maxName = 128
+
+// createNamed adds a tag or a correspondent. An existing name (case-insensitively) is returned as is, so an agent
+// that did not check the list first still cannot make a near-duplicate of the kind Paperless would accept.
+func (g *Gateway) createNamed(kind string) handler {
+	return func(w http.ResponseWriter, r *http.Request, agent string) {
+		var in struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in); err != nil {
+			fail(w, http.StatusBadRequest, "JSON body {\"name\": ...}: "+err.Error())
+			return
+		}
+		name := protocol.CleanText(strings.TrimSpace(in.Name), maxName)
+		if name == "" {
+			fail(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		ctx := r.Context()
+		if id, err := g.resolve(ctx, kind, name); err != nil {
+			g.upstream(w, kind, err)
+			return
+		} else if id != 0 {
+			n, _ := g.lookup(ctx, kind, false)
+			reply(w, http.StatusOK, map[string]any{"id": id, "name": n.byID[id], "existing": true})
+			return
+		}
+		var created ppapi.Named
+		var err error
+		switch kind {
+		case "tags":
+			created, err = g.PP.CreateTag(ctx, name)
+		case "correspondents":
+			created, err = g.PP.CreateCorrespondent(ctx, name)
+		default:
+			panic("createNamed: " + kind)
+		}
+		if err != nil {
+			g.upstream(w, kind, err)
+			return
+		}
+		if _, err := g.lookup(ctx, kind, true); err != nil { // the cache must see it before the next upload
+			g.log().Warn("refreshing names after a create", "kind", kind, "err", err)
+		}
+		g.record(strings.TrimSuffix(kind, "s")+".created", agent, "", strconv.Itoa(created.ID), created.Name)
+		g.log().Info("created", "agent", agent, "kind", kind, "id", created.ID, "name", created.Name)
+		reply(w, http.StatusCreated, map[string]any{"id": created.ID, "name": created.Name, "existing": false})
 	}
 }
 
