@@ -1,4 +1,4 @@
-.PHONY: check test ios-test e2e e2e-ui build dist-adapter dist-adapter-mailpit docker-hub clean
+.PHONY: check test ios-test e2e e2e-ui build dist-adapter dist-adapter-mailpit docker-hub docker-adapter-paperless clean
 
 # What CI runs on every push and pull request (.github/workflows/ci.yml), minus Docker.
 check: test e2e
@@ -18,7 +18,7 @@ e2e-ui:
 
 # Every command, for this machine, into bin/.
 build:
-	go build -o bin/ ./broker/cmd/... ./adapter/cmd/... ./adapters/warpgate/cmd/... ./adapters/mailpit/cmd/...
+	go build -o bin/ ./broker/cmd/... ./adapter/cmd/... ./adapters/warpgate/cmd/... ./adapters/mailpit/cmd/... ./adapters/paperless/cmd/...
 
 # The Warpgate adapter, for the Warpgate host (adapters/warpgate/README.md).
 dist-adapter: test
@@ -34,6 +34,10 @@ dist-adapter-mailpit: test
 # The hub's container image (docs/docker.md).
 docker-hub:
 	docker build -f broker/Dockerfile -t interpose-hub:local .
+
+# The Paperless adapter's container image (adapters/paperless/README.md).
+docker-adapter-paperless:
+	docker build -f adapters/paperless/Dockerfile -t interpose-adapter-paperless:local .
 
 clean:
 	rm -rf bin adapters/warpgate/deploy/interpose-adapter adapters/mailpit/deploy/interpose-adapter-mailpit

@@ -1,0 +1,40 @@
+# The Paperless adapter of the clearing house, beside Paperless: a reference compose file. Copy it next to the Paperless
+# stack (or into it as one more service) and adjust the networks and the reverse-proxy labels to the deployment.
+#
+# It holds what can act: a Paperless API token (secrets/paperless-token), the trust list (which accounts' phones may
+# decide) and the agents' token hashes. It connects out to the hub (HUB_URL) and to Paperless (PAPERLESS_URL), and
+# serves the agents' gateway on :8750, plain HTTP: put the reverse proxy's TLS in front of it and limit who may reach it
+# (an IP allow-list for the agents' host, for instance). Never a forward-auth that passes a remote-user header to
+# Paperless: the gateway talks to Paperless itself, with its token only.
+#
+# Settings: .env (from adapter.env.default). First run: `docker compose run --rm adapter-paperless key`, register the
+# public key at the hub and put the hub token in data/hub-token, `trust add-user`, `agent add` (README.md).
+
+services:
+  adapter-paperless:
+    image: ghcr.io/vfilby/interpose-adapter-paperless:latest # pin a sha- tag in a real deployment
+    restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 96m
+    pids_limit: 64
+    networks:
+      - paperless-internal # where Paperless itself is (PAPERLESS_URL=http://paperless:8000)
+      - reverse-proxy # where the reverse proxy reaches the gateway
+    command: [run, "-id=${ADAPTER_ID:-paperless}", -source=paperless, -dir=/data, "-hub=${HUB_URL:?set HUB_URL in .env}",
+      -poll=3s, "-ttl=${REQUEST_TTL:-15m}", -listen=:8750]
+    env_file: [.env]
+    volumes:
+      - ./data:/data # signing key, hub-token, trust list, open records, leases, agents, audit.jsonl, access.jsonl
+      - ./secrets/paperless-token:/run/secrets/paperless-token:ro
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "3"}
+
+networks:
+  paperless-internal:
+    external: true
+  reverse-proxy:
+    external: true

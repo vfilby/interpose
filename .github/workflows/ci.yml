@@ -41,7 +41,7 @@ jobs:
       - name: cross-build (linux/arm64, linux/amd64)
         run: |
           for arch in arm64 amd64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "bin/$arch/" ./broker/cmd/... ./adapter/cmd/... ./adapters/warpgate/cmd/... ./adapters/mailpit/cmd/...
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "bin/$arch/" ./broker/cmd/... ./adapter/cmd/... ./adapters/warpgate/cmd/... ./adapters/mailpit/cmd/... ./adapters/paperless/cmd/...
           done
           ls -l bin/*
 
@@ -75,6 +75,14 @@ jobs:
         run: cp adapter.env.default .env && docker compose config -q
       - name: mail adapter install script
         run: bash -n adapters/mailpit/deploy/install.sh
+      - name: Paperless adapter image
+        run: docker build -f adapters/paperless/Dockerfile -t interpose-adapter-paperless:ci .
+      - name: Paperless adapter compose file
+        working-directory: adapters/paperless/deploy
+        run: |
+          cp adapter.env.default .env
+          docker network create paperless-internal && docker network create reverse-proxy
+          docker compose config -q
 
   ios:
     name: ApproverKit (swift test)
