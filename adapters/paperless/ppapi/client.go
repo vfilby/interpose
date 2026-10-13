@@ -235,6 +235,26 @@ func (c *Client) Document(ctx context.Context, id int) (Document, error) {
 	return d, err
 }
 
+// Patch changes the given fields of a document (title, created, correspondent, document_type, tags, as Paperless's
+// API names them, ids not names) and returns the document as it is afterwards, without content.
+func (c *Client) Patch(ctx context.Context, id int, fields map[string]any) (Document, error) {
+	body, err := json.Marshal(fields)
+	if err != nil {
+		return Document{}, err
+	}
+	resp, err := c.req(ctx, http.MethodPatch, "/api/documents/"+strconv.Itoa(id)+"/", nil, bytes.NewReader(body), "application/json")
+	if err != nil {
+		return Document{}, err
+	}
+	defer resp.Body.Close()
+	var d Document
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSON)).Decode(&d); err != nil {
+		return Document{}, fmt.Errorf("Paperless: patch: %w", err)
+	}
+	d.Content = ""
+	return d, nil
+}
+
 // Download returns the document's original file: the body (which the caller closes), its content type and the file
 // name Paperless gives it.
 func (c *Client) Download(ctx context.Context, id int) (body io.ReadCloser, ctype, name string, err error) {

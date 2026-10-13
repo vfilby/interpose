@@ -128,6 +128,10 @@ func start(ctx context.Context, log *slog.Logger, dir, listen string) (adapter.S
 	if len(agents.Names()) == 0 {
 		log.Warn("no agents: nobody can use the gateway (`" + prog + " agent add NAME`)")
 	}
+	uploads, err := paperless.OpenUploads(filepath.Join(dir, "uploads.json"))
+	if err != nil {
+		return nil, err
+	}
 	access, err := audit.OpenRotating(filepath.Join(dir, "access.jsonl"), 64<<20, 8)
 	if err != nil {
 		return nil, err
@@ -136,6 +140,7 @@ func start(ctx context.Context, log *slog.Logger, dir, listen string) (adapter.S
 		PP:             ppapi.New(base, strings.TrimSpace(string(tok)), nil),
 		Store:          store,
 		Agents:         agents,
+		Uploads:        uploads,
 		PublicURL:      public,
 		Access:         access,
 		Log:            log,
