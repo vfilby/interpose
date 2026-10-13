@@ -30,6 +30,8 @@ type fakePaperless struct {
 	mu sync.Mutex
 
 	docs  []ppapi.Document
+	tags  []ppapi.Named
+	corrs []ppapi.Named
 	text  map[int]string // content by id
 	tasks map[string]ppapi.Task
 	next  int
@@ -48,7 +50,8 @@ var (
 func ip(n int) *int { return &n }
 
 func newFake(t *testing.T) *fakePaperless {
-	f := &fakePaperless{t: t, text: map[int]string{}, tasks: map[string]ppapi.Task{}, next: 100}
+	f := &fakePaperless{t: t, text: map[int]string{}, tasks: map[string]ppapi.Task{}, next: 100,
+		tags: slices.Clone(fakeTags), corrs: slices.Clone(fakeCorrs)}
 	f.docs = []ppapi.Document{
 		{ID: 1, Title: "Policy renewal", Correspondent: ip(10), DocumentType: ip(21), Tags: []int{2}, Created: "2026-01-05"},
 		{ID: 2, Title: "Claim form", Correspondent: ip(10), DocumentType: ip(21), Tags: []int{2, 3}, Created: "2026-03-01"},
@@ -76,9 +79,24 @@ func (f *fakePaperless) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	switch {
 	case r.Method == "GET" && r.URL.Path == "/api/tags/":
-		list(fakeTags)
+		list(f.tags)
 	case r.Method == "GET" && r.URL.Path == "/api/correspondents/":
-		list(fakeCorrs)
+		list(f.corrs)
+	case r.Method == "POST" && (r.URL.Path == "/api/tags/" || r.URL.Path == "/api/correspondents/"):
+		var in struct{ Name string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
+			w.WriteHeader(400)
+			return
+		}
+		f.next++
+		n := ppapi.Named{ID: f.next, Name: in.Name}
+		if r.URL.Path == "/api/tags/" {
+			f.tags = append(f.tags, n)
+		} else {
+			f.corrs = append(f.corrs, n)
+		}
+		w.WriteHeader(201)
+		json.NewEncoder(w).Encode(n)
 	case r.Method == "GET" && r.URL.Path == "/api/document_types/":
 		list(fakeTypes)
 	case r.Method == "GET" && r.URL.Path == "/api/documents/":
@@ -679,4 +697,44 @@ func mustOpen(t *testing.T, path string) io.Reader {
 	}
 	t.Cleanup(func() { f.Close() })
 	return f
+}
+
+func TestCreateNames(t *testing.T) {
+	h := newHarness(t)
+	// A new tag is created and is usable for the next upload at once.
+	code, out, raw := h.do("POST", "/v1/tags", strings.NewReader(`{"name":"Warranty"}`), "application/json", "")
+	if code != 201 || out["existing"] != false || out["name"] != "Warranty" {
+		t.Fatalf("create tag: %d %s", code, raw)
+	}
+	code, out, raw = upload(t, h, "Dishwasher", map[string]string{"tags": "warranty"})
+	if code != 201 || out["status"] != "done" {
+		t.Fatalf("upload with the new tag: %d %s", code, raw)
+	}
+	if tags := out["document"].(map[string]any)["tags"].([]any); len(tags) != 1 || tags[0] != "Warranty" {
+		t.Errorf("tags on the document: %v", tags)
+	}
+	// An existing name, in any case, is returned rather than duplicated.
+	code, out, raw = h.do("POST", "/v1/correspondents", strings.NewReader(`{"name":"insurance co"}`), "application/json", "")
+	if code != 200 || out["existing"] != true || out["id"] != float64(10) || out["name"] != "Insurance Co" {
+		t.Errorf("existing correspondent: %d %s", code, raw)
+	}
+	h.fake.mu.Lock()
+	n := len(h.fake.corrs)
+	h.fake.mu.Unlock()
+	if n != len(fakeCorrs) {
+		t.Errorf("a duplicate correspondent was created")
+	}
+	code, out, raw = h.do("POST", "/v1/correspondents", strings.NewReader(`{"name":"BC Hydro"}`), "application/json", "")
+	if code != 201 || out["existing"] != false {
+		t.Errorf("new correspondent: %d %s", code, raw)
+	}
+	// Bad asks, and no creating document types.
+	for _, body := range []string{`{}`, `{"name":"   "}`, `nope`} {
+		if code, _, raw := h.do("POST", "/v1/tags", strings.NewReader(body), "application/json", ""); code != 400 {
+			t.Errorf("%s: %d %s", body, code, raw)
+		}
+	}
+	if code, _, _ := h.do("POST", "/v1/document_types", strings.NewReader(`{"name":"x"}`), "application/json", ""); code != 405 {
+		t.Errorf("document types must not be creatable: %d", code)
+	}
 }
