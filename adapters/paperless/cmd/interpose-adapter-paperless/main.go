@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -83,9 +84,11 @@ func envInt(k string, def int) (int, error) {
 
 // start builds the source and serves the gateway until ctx ends.
 func start(ctx context.Context, log *slog.Logger, dir, listen string) (adapter.Source, error) {
+	// Paperless is reached inside its own stack's network (http://paperless:8000), never across a LAN: plain http
+	// to any host is accepted here, unlike the hub URL (adapter.CheckURL), which crosses the network.
 	base := env("PAPERLESS_URL", "http://127.0.0.1:8000")
-	if err := adapter.CheckURL("PAPERLESS_URL", base); err != nil {
-		return nil, err
+	if u, err := url.Parse(base); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, fmt.Errorf("PAPERLESS_URL %q: want http://host:port or https://host", base)
 	}
 	public := env("PAPERLESS_PUBLIC_URL", "")
 	if public == "" {
@@ -169,8 +172,16 @@ func agentCmd(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s agent [-dir D] add NAME | remove NAME | list\n", prog)
 	}
-	_ = fs.Parse(args)
-	rest := fs.Args()
+	// -dir may come before or after the verb (`agent add -dir=/data NAME` is what people type).
+	var flags, rest []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	_ = fs.Parse(flags)
 	if len(rest) == 0 {
 		fs.Usage()
 		os.Exit(2)
