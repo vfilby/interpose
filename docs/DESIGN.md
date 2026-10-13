@@ -139,12 +139,17 @@ all held by one person.
   - Facts: from, each recipient, subject, attachments with sizes, a body excerpt.
   - Approve releases that message to exactly the recipients shown.
   - Shape `once`. The outcome is a tag on the message.
-- **Paperless (MCP gateway).**
-  - The gateway exposes MCP tools to agents and holds a view-only Paperless token. Agents never get that token.
-  - An agent asks for a lease, e.g. "correspondent = Insurance, read, 2h, max 20 documents". The lease is the record's
-    `lease` with shape `lease`.
-  - The gateway enforces it on every call: a server-side filter, a per-document scope check, a count, and expiry.
-  - Writes are a separate lease or per-call approval; deletes are never allowed.
+- **Paperless (gateway).** Built: [adapters/paperless](../adapters/paperless/README.md).
+  - The gateway is a small HTTP API for agents (not MCP: a `curl` from an agent's skill is enough, and the agent
+    host's credential proxy can inject the agent's token). It holds a Paperless token of a user that can add and view
+    documents. Agents never get that token; each has a bearer token for the gateway whose hash alone is kept.
+  - Adding a document needs no approval (the deployment's choice: filing receipts is the common case, and an upload
+    reveals nothing); the agent gets the document's link back. Deletes and edits do not exist in the gateway.
+  - To read, an agent asks for a lease, e.g. "correspondent = Insurance, 2h, max 20 documents". The lease is the
+    record's `lease` with shape `lease`; the scope is also spelled out in facts, since the phone shows those first.
+  - The gateway enforces it on every call: the scope's filters are added to every search, a document is served only
+    if Paperless lists it under the scope's own filter, distinct documents read are counted against the budget, and
+    the lease expires.
   - Here the Source's "approve" means "grant the lease".
 - **Delegation.** Later, an approved lease could be issued as an attenuable, holder-bound capability (Biscuit-style),
   so an agent can narrow it for a sub-agent but never widen it.

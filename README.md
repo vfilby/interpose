@@ -20,6 +20,8 @@ adapter/              how adapters work, the shared adapter core and command lin
                       and the reference adapter (interpose-adapter-demo)
 adapters/warpgate/    the Warpgate adapter (interpose-adapter) and its guided install  adapters/warpgate/README.md
 adapters/mailpit/     the mail adapter (interpose-adapter-mailpit): held mail          adapters/mailpit/README.md
+adapters/paperless/   the Paperless adapter (interpose-adapter-paperless): a gateway   adapters/paperless/README.md
+                      where agents add documents freely and read within leases
 internal/             Go shared by all of the above: protocol (+ Go/Swift interop fixtures), audit log, software device
 docs/                 design, wire protocol, Docker setup, runbooks
 scripts/              end-to-end tests (CLI device; real app in the simulator)
@@ -51,6 +53,7 @@ make build         # every Go command into bin/
 make dist-adapter  # tests, then adapters/warpgate/deploy/interpose-adapter for linux/arm64
 make dist-adapter-mailpit  # tests, then adapters/mailpit/deploy/interpose-adapter-mailpit (linux/amd64)
 make docker-hub    # the hub's container image
+make docker-adapter-paperless  # the Paperless adapter's container image (published to GHCR by CI)
 ```
 
 ### Pull requests and CI
