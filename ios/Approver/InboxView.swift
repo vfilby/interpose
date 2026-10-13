@@ -56,7 +56,12 @@ struct InboxView: View {
                             HStack {
                                 Text(d.approve ? "Approved" : "Denied")
                                 Text("·")
-                                OutcomeText(outcome: model.outcomes[d.id])
+                                // The live outcome first; after a relaunch only the stored final ack is left.
+                                if let o = model.outcomes[d.id] ?? d.settled.map(Outcome.final) {
+                                    OutcomeText(outcome: o)
+                                } else {
+                                    Text("not confirmed before the app closed")
+                                }
                             }
                             .font(.footnote).foregroundStyle(.secondary)
                         }
