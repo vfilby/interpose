@@ -145,7 +145,7 @@ func (f *fakePaperless) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				time.Sleep(50 * time.Millisecond)
 				f.mu.Lock()
-				f.tasks[id] = ppapi.Task{TaskID: id, Status: "SUCCESS", RelatedDocument: strconv.Itoa(d.ID), TaskFileName: d.Title}
+				f.tasks[id] = ppapi.Task{TaskID: id, Status: "SUCCESS", RelatedDocument: ppapi.DocID(d.ID), TaskFileName: d.Title}
 				f.mu.Unlock()
 			}()
 		}

@@ -56,7 +56,25 @@ type Task struct {
 	Status          string `json:"status"` // PENDING, STARTED, SUCCESS, FAILURE
 	Result          string `json:"result"`
 	TaskFileName    string `json:"task_file_name"`
-	RelatedDocument string `json:"related_document"` // the document id as a string, once SUCCESS
+	RelatedDocument DocID  `json:"related_document"` // the document id once SUCCESS; 0 before
+}
+
+// DocID is a document id as Paperless serializes it in a task: a number in current releases, a string in older
+// ones, null while the task runs.
+type DocID int
+
+func (d *DocID) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "" || s == "null" {
+		*d = 0
+		return nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fmt.Errorf("related_document %q: %w", s, err)
+	}
+	*d = DocID(n)
+	return nil
 }
 
 const (
@@ -120,9 +138,12 @@ func (c *Client) req(ctx context.Context, method, path string, q url.Values, bod
 		return nil, err
 	}
 	switch resp.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
 		resp.Body.Close()
-		return nil, ErrUnauthorized
+		return nil, fmt.Errorf("%w: 401 on %s %s (the token is not one Paperless knows)", ErrUnauthorized, method, path)
+	case http.StatusForbidden:
+		resp.Body.Close()
+		return nil, fmt.Errorf("%w: 403 on %s %s (the adapter's user lacks a permission for it)", ErrUnauthorized, method, path)
 	case http.StatusNotFound:
 		resp.Body.Close()
 		return nil, ErrNotFound

@@ -159,11 +159,41 @@ func (g *Gateway) auth(h handler) http.Handler {
 		}
 		if !found {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="paperless-gateway"`)
+			g.log().Warn("request refused", "method", r.Method, "path", r.URL.Path, "status", http.StatusUnauthorized, "error", "unknown agent token")
 			fail(w, http.StatusUnauthorized, "unknown agent token")
 			return
 		}
-		h(w, r, agent)
+		rec := &statusRecorder{ResponseWriter: w}
+		h(rec, r, agent)
+		// Every failure an agent sees is in the log too, with what it was told: the agent's report and the log agree.
+		if rec.status >= 400 {
+			g.log().Warn("request failed", "agent", agent, "method", r.Method, "path", r.URL.Path, "status", rec.status, "error", strings.TrimSpace(rec.body.String()))
+		}
 	})
+}
+
+// statusRecorder remembers the status a handler sent and, for failures, the start of the body.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	body   strings.Builder
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	if s.status >= 400 && s.body.Len() < 300 {
+		s.body.Write(b[:min(len(b), 300-s.body.Len())])
+	}
+	return s.ResponseWriter.Write(b)
 }
 
 func fail(w http.ResponseWriter, code int, msg string) {
@@ -461,8 +491,8 @@ func (g *Gateway) taskResult(w http.ResponseWriter, r *http.Request, agent, task
 		}
 		switch {
 		case found && t.Status == ppapi.TaskSuccess:
-			id, err := strconv.Atoi(t.RelatedDocument)
-			if err != nil || id <= 0 {
+			id := int(t.RelatedDocument)
+			if id <= 0 {
 				fail(w, http.StatusBadGateway, "Paperless finished the upload but named no document")
 				return
 			}
