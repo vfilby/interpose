@@ -472,7 +472,7 @@ final class AppModel: ObservableObject {
             try await client.postDecision(DecisionPost(adapter: req.record.adapter, requestId: req.record.id, decision: env))
             outcomes[req.id] = .sent
             decided.removeAll { $0.id == req.id }
-            decided.insert(Decided(id: req.id, title: req.record.title, approve: approve, at: Date()), at: 0)
+            decided.insert(Decided(id: req.id, title: req.record.title, approve: approve, at: Date(), record: req.record), at: 0)
             decided = Array(decided.prefix(DecidedStore.limit))
             saveDecided()
             // The adapter usually answers within a second or two: poll quickly for the ack instead of waiting for the

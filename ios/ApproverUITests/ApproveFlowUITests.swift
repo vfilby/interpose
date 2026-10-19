@@ -117,6 +117,17 @@ final class ApproveFlowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["approved (confirmed by demo)"].firstMatch.waitForExistence(timeout: 10), "outcome gone after relaunch")
         attach(app, "relaunched")
 
+        // A tap on a decision opens what was asked: the facts and the reason are kept with it on disk.
+        XCTAssertFalse(app.staticTexts["fix the backups"].exists, "details shown before the decision was opened")
+        app.staticTexts["claude wants RW on db-01"].tap()
+        // A labelled row is one element to accessibility: "label, value".
+        XCTAssertTrue(app.staticTexts["Host, db-01"].waitForExistence(timeout: 5), "the facts of a past decision do not show")
+        XCTAssertTrue(app.staticTexts["Access, RW"].exists, "a levelled fact of a past decision does not show")
+        XCTAssertTrue(app.staticTexts["“fix the backups”"].exists, "the reason of a past decision does not show")
+        attach(app, "decided-opened")
+        app.staticTexts["claude wants RW on db-01"].tap()
+        XCTAssertFalse(app.staticTexts["“fix the backups”"].waitForExistence(timeout: 2), "a second tap did not close the decision")
+
         // Re-enroll from the Device tab with a join code for vince (same hub: what you do after leaving it, or after the
         // hub forgot the device). This phone is already on vince's roster, so it comes back active at once. The code
         // can only exist now that vince does, so the test asks the management UI for it, as an admin would.

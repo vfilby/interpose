@@ -16,24 +16,7 @@ struct RequestDetailView: View {
         List {
             Section {
                 Text(sanitize(r.title)).font(.title3.weight(.semibold))
-                LabeledContent("Requester", value: sanitize(r.requester))
-                if let who = r.onBehalfOf {
-                    LabeledContent("On behalf of") {
-                        VStack(alignment: .trailing) {
-                            Text(sanitize(who.display ?? who.principal))
-                            Text("attested by \(sanitize(who.attestedBy))").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                ForEach(r.facts ?? [], id: \.self) { f in
-                    LabeledContent(sanitize(f.label)) {
-                        Text(sanitize(f.value)).foregroundStyle(f.color).fontWeight(f.level?.isEmpty == false ? .semibold : .regular)
-                    }
-                }
-                if let l = r.lease {
-                    LabeledContent("Lease", value: "\(sanitize(l.scope)) for \(Duration.seconds(l.durationS).formatted(.units(allowed: [.hours, .minutes])))"
-                                   + ((l.maxUses ?? 0) > 0 ? ", max \(l.maxUses!) uses" : ""))
-                }
+                RecordRows(record: r)
                 LabeledContent("Expires") { Text(Date(timeIntervalSince1970: TimeInterval(r.expiresAt)), style: .relative) }
             } header: {
                 Text("\(sanitize(r.adapter)) · \(sanitize(r.kind))")
@@ -41,10 +24,8 @@ struct RequestDetailView: View {
                 if r.isHighRisk { Text("High risk: approving needs a long press, then Face ID.").foregroundStyle(.red) }
             }
 
-            if let reason = r.reason, !reason.isEmpty {
-                Section("Reason given by \(sanitize(r.requester)) (their claim)") {
-                    Text("“\(sanitize(reason))”").italic()
-                }
+            if r.hasReason {
+                Section(ReasonRow.title(r)) { ReasonRow(record: r) }
             }
 
             Section {
@@ -101,6 +82,48 @@ struct RequestDetailView: View {
             working = false
         }
     }
+}
+
+/// The authoritative rows of a record, as list rows: requester, on-behalf-of, facts, lease. Shared by the request
+/// screen and the opened "Decided here" entry, so a past decision shows exactly what was decided.
+struct RecordRows: View {
+    let record: Record
+
+    var body: some View {
+        LabeledContent("Requester", value: sanitize(record.requester))
+        if let who = record.onBehalfOf {
+            LabeledContent("On behalf of") {
+                VStack(alignment: .trailing) {
+                    Text(sanitize(who.display ?? who.principal))
+                    Text("attested by \(sanitize(who.attestedBy))").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        ForEach(record.facts ?? [], id: \.self) { f in
+            LabeledContent(sanitize(f.label)) {
+                Text(sanitize(f.value)).foregroundStyle(f.color).fontWeight(f.level?.isEmpty == false ? .semibold : .regular)
+            }
+        }
+        if let l = record.lease {
+            LabeledContent("Lease", value: "\(sanitize(l.scope)) for \(Duration.seconds(l.durationS).formatted(.units(allowed: [.hours, .minutes])))"
+                           + ((l.maxUses ?? 0) > 0 ? ", max \(l.maxUses!) uses" : ""))
+        }
+    }
+}
+
+/// The requester's reason, quoted: it is their claim, not something the adapter checked.
+struct ReasonRow: View {
+    let record: Record
+
+    static func title(_ r: Record) -> String { "Reason given by \(sanitize(r.requester)) (their claim)" }
+
+    var body: some View {
+        Text("“\(sanitize(record.reason ?? ""))”").italic()
+    }
+}
+
+extension Record {
+    var hasReason: Bool { !(reason ?? "").isEmpty }
 }
 
 /// The second deliberate gesture for high-risk approvals: press and hold until the bar fills.

@@ -12,6 +12,9 @@ struct Decided: Identifiable, Equatable, Codable {
     /// The verified final ack (approved, denied or expired), so the outcome still shows after the app was relaunched
     /// and the live outcomes are gone.
     var settled: Ack?
+    /// The verified record as it was decided (facts, requester, reason, lease), so the list can show what was approved
+    /// or denied, not only the title. Absent for entries written before the app kept it.
+    var record: Record?
 }
 
 /// The decided list on disk: one JSON file in Application Support, readable only while the phone is unlocked, not

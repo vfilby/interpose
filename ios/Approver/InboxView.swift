@@ -4,6 +4,8 @@ import SwiftUI
 struct InboxView: View {
     @EnvironmentObject var model: AppModel
     @State private var now = Date()
+    /// The decision whose details are open; one at a time keeps the list readable.
+    @State private var expanded: String?
 
     var body: some View {
         List {
@@ -49,23 +51,14 @@ struct InboxView: View {
             }
 
             if !model.decided.isEmpty {
-                Section("Decided here") {
+                Section {
                     ForEach(model.decided) { d in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(sanitize(d.title)).lineLimit(1)
-                            HStack {
-                                Text(d.approve ? "Approved" : "Denied")
-                                Text("·")
-                                // The live outcome first; after a relaunch only the stored final ack is left.
-                                if let o = model.outcomes[d.id] ?? d.settled.map(Outcome.final) {
-                                    OutcomeText(outcome: o)
-                                } else {
-                                    Text("not confirmed before the app closed")
-                                }
-                            }
-                            .font(.footnote).foregroundStyle(.secondary)
-                        }
+                        DecidedRow(decided: d, expanded: binding(expanding: d.id))
                     }
+                } header: {
+                    Text("Decided here")
+                } footer: {
+                    Text("Tap a decision to see what was asked.")
                 }
             }
 
@@ -104,6 +97,61 @@ struct InboxView: View {
             while !Task.isCancelled {
                 now = Date()
                 try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+}
+
+extension InboxView {
+    private func binding(expanding id: String) -> Binding<Bool> {
+        Binding(get: { expanded == id }, set: { open in
+            if open { expanded = id } else if expanded == id { expanded = nil }
+        })
+    }
+}
+
+/// One past decision. Closed: the summary line as before. Opened (a tap on the row): what was on the request screen
+/// when it was decided (the record kept with the decision), when it was decided, and the request id.
+struct DecidedRow: View {
+    @EnvironmentObject var model: AppModel
+    let decided: Decided
+    @Binding var expanded: Bool
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded.animation()) {
+            if let r = decided.record {
+                LabeledContent("Adapter", value: "\(sanitize(r.adapter)) · \(sanitize(r.kind))")
+                RecordRows(record: r)
+                if r.hasReason {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(ReasonRow.title(r)).font(.footnote).foregroundStyle(.secondary)
+                        ReasonRow(record: r)
+                    }
+                }
+            } else {
+                Text("The details of this decision were not kept.").foregroundStyle(.secondary)
+            }
+            LabeledContent(decided.approve ? "Approved" : "Denied") {
+                Text(decided.at, format: .dateTime.day().month().hour().minute())
+            }
+            LabeledContent("Request", value: sanitize(decided.id)).font(.footnote)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    if decided.record?.isHighRisk == true { Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.red) }
+                    Text(sanitize(decided.title)).lineLimit(expanded ? nil : 1)
+                }
+                HStack {
+                    Text(decided.approve ? "Approved" : "Denied")
+                    Text("·")
+                    // The live outcome first; after a relaunch only the stored final ack is left.
+                    if let o = model.outcomes[decided.id] ?? decided.settled.map(Outcome.final) {
+                        OutcomeText(outcome: o)
+                    } else {
+                        Text("not confirmed before the app closed")
+                    }
+                }
+                .font(.footnote).foregroundStyle(.secondary)
             }
         }
     }
