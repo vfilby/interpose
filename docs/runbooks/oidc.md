@@ -23,6 +23,9 @@ to them:
 - `interpose_users`: may sign in to the hub;
 - `interpose_admins`: may sign in and is a hub admin.
 
+These groups reach the hub as OIDC claims and decide sign-in only. Adapters can also trust LDAP groups, but they read
+the directory themselves, never the hub's claims: [ldap.md](ldap.md).
+
 ## 2. Authelia
 
 In your Authelia configuration, under `identity_providers.oidc.authorization_policies`:

@@ -185,6 +185,7 @@ func (ad *Adapter) Tick(ctx context.Context) error {
 	for _, err := range ad.trust.Refresh(ctx, ad.hub.Roster) {
 		ad.log.Warn("trusted users", "err", err) // that user keeps their last verified roster
 	}
+	ad.auditTrust()
 	ad.reportNotLogged() // decisions dropped after the last report, once the hub stops sending them
 	items, err := ad.src.Pending(ctx)
 	if err != nil {
@@ -250,6 +251,19 @@ func (ad *Adapter) Tick(ctx context.Context) error {
 	}
 	ad.save()
 	return nil
+}
+
+// auditTrust writes every change in who is trusted since the last tick: which user, which account, from which source.
+func (ad *Adapter) auditTrust() {
+	for _, c := range ad.trust.TakeChanges() {
+		ev := "trust-removed"
+		if c.Added {
+			ev = "trust-added"
+		}
+		ad.log.Info(ev, "user", c.Pin.User, "account", c.Pin.Account, "source", c.Pin.Source)
+		ad.write(audit.Event{Time: ad.now(), Event: ev, Requester: c.Pin.User,
+			Detail: fmt.Sprintf("account %s via %s", c.Pin.Account, c.Pin.Source)})
+	}
 }
 
 func (ad *Adapter) newRecord(it Item, now time.Time) (*open, error) {
@@ -403,13 +417,13 @@ func (ad *Adapter) Handle(ctx context.Context, q QueuedDecision) {
 	// is tried against each, and the error that counts is one other than "names another user".
 	var (
 		d    protocol.Decision
-		who  string
+		by   Holder
 		err  error
 		errs []error
 	)
 	for _, h := range holders {
 		if d, err = protocol.VerifyDecision(q.Decision, h.Card, h.User, ad.cfg.ID, o.Payload, o.Record, now); err == nil {
-			who = h.User + " on " + h.Card.Name
+			by = h
 			break
 		}
 		errs = append(errs, err)
@@ -424,6 +438,17 @@ func (ad *Adapter) Handle(ctx context.Context, q QueuedDecision) {
 		}
 		reject(err.Error())
 		return
+	}
+	// The signature holds. Now: is the user still trusted, as of this moment? A local pin is; an LDAP one is asked
+	// of the directory live, so leaving a group takes effect at the next decision, not the next refresh.
+	source, err := ad.trust.Confirm(ctx, by.User)
+	if err != nil {
+		reject(err.Error())
+		return
+	}
+	who := by.User + " on " + by.Card.Name
+	if source != SourceLocal {
+		who += " (" + source + ")"
 	}
 
 	// The service's state is the last word: still pending, and still what the person was shown.
@@ -492,6 +517,9 @@ func (ad *Adapter) sendAck(ctx context.Context, o *open, outcome, detail string,
 		ad.log.Warn("ack to hub failed", "request", o.Record.ID, "outcome", outcome, "err", err)
 	}
 }
+
+// Trust is the adapter's trust list.
+func (ad *Adapter) Trust() *Trust { return ad.trust }
 
 // Open lists the records not yet final, for status output.
 func (ad *Adapter) Open() []protocol.Record {

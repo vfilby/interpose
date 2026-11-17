@@ -243,7 +243,8 @@ a removal takes effect at an adapter only once that adapter sees it.
 
 An admin can also delete an account at the hub (management UI, break glass): for when none of its phones is left to
 approve another. The next enrollment of that user starts a new account with a new fingerprint, which adapters do not
-trust until `interpose-adapter trust add-user` is run again; the old account's trust does not carry over.
+trust until `interpose-adapter trust add-user` is run again (or, for adapters that read the fingerprint from the user's
+LDAP entry, until that entry is updated); the old account's trust does not carry over.
 
 ## Hub HTTP API (transport only)
 

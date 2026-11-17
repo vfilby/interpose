@@ -29,6 +29,8 @@ services:
     volumes:
       - ./data:/data # signing key, hub-token, trust list, open records, leases, agents, audit.jsonl, access.jsonl
       - ./secrets/paperless-token:/run/secrets/paperless-token:ro
+      # With LDAP trust sources (docs/runbooks/ldap.md): the read-only bind account's password.
+      #- ./secrets/ldap-password:/run/secrets/ldap-password:ro
     logging:
       driver: json-file
       options: {max-size: "5m", max-file: "3"}

@@ -80,6 +80,13 @@ func (w *world) enroll(name, user, mode string) (*softdevice.Device, *softdevice
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWith(t, nil)
+}
+
+// newWorldWith lets a test choose the adapter's trust sources. trust is called once the accounts exist (w.account is
+// vince's); nil pins vince locally.
+func newWorldWith(t *testing.T, trust func(w *world) adapter.TrustOptions) *world {
+	t.Helper()
 	dir := t.TempDir()
 	w := &world{t: t, ctx: context.Background(), dir: dir, now: time.Now()}
 	st, err := hub.Open(filepath.Join(dir, "hub.json"))
@@ -108,10 +115,16 @@ func newWorld(t *testing.T) *world {
 	}
 	w.account = h.Account // what the phone shows; the admin types it into trust add-user
 
-	if err := adapter.TrustAddUser(dir, "vince", w.account); err != nil {
-		t.Fatal(err)
+	opts := adapter.TrustOptions{Now: w.clock}
+	if trust == nil {
+		if err := adapter.TrustAddUser(dir, "vince", w.account); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		opts = trust(w)
+		opts.Now = w.clock
 	}
-	trust, err := adapter.LoadTrust(dir)
+	tr, err := adapter.NewTrust(dir, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +136,7 @@ func newWorld(t *testing.T) *world {
 	}
 	t.Cleanup(func() { al.Close() })
 	w.ad, err = adapter.New(adapter.Config{ID: "demo", Key: key, StateFile: filepath.Join(dir, "adapter.json"),
-		TTL: 15 * time.Minute, Poll: time.Hour, Now: w.clock}, w.src, w.adHub, trust, al,
+		TTL: 15 * time.Minute, Poll: time.Hour, Now: w.clock}, w.src, w.adHub, tr, al,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
