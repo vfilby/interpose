@@ -26,9 +26,11 @@ These hold for every adapter, in any language. The wire formats are in [docs/PRO
 3. **It signs every record** with its own Ed25519 key, and **seals it** (HPKE, P-256) separately to each device of each
    user it trusts. The hub sees only ciphertext and routing metadata.
 4. **It trusts users, not the hub.** Its trust list pins user id + account fingerprint (the hash of the user's first
-   roster), set by an operator with `trust add-user`. It fetches each user's roster chain through the hub and verifies
-   it itself: every version signed by a device on the previous one, no rollback, no fork. A hub that lies can only
-   withhold.
+   roster), set by an operator with `trust add-user`, or read from the user's LDAP entry when the adapter is told to
+   trust that user or a group they are in (`-trust`; [docs/runbooks/ldap.md](../docs/runbooks/ldap.md)). It fetches
+   each user's roster chain through the hub and verifies it itself: every version signed by a device on the previous
+   one, no rollback, no fork. A hub that lies can only withhold. An LDAP user is asked of the directory again, live,
+   before any decision of theirs is acted on.
 5. **It verifies every decision before acting**: a device on a trusted user's current roster, the right key (approve
    needs the approve key), this adapter's id, the hash of the exact record it sent, an unused nonce, a timestamp within
    300 s, an unexpired record.
@@ -37,8 +39,8 @@ These hold for every adapter, in any language. The wire formats are in [docs/PRO
 7. **It fails closed.** Unanswered requests are denied at the service when they expire. An unreadable trust list stops
    publishing. A decision that does not verify does nothing.
 8. **It acknowledges** every outcome with a signed ack, so the phone can show what actually happened.
-9. **It keeps an audit log** (append-only JSON lines) of records, publications and outcomes, and **does not let the
-   hub fill it**. Everything from the hub is bounded before it is written: at most 500 decisions are looked at per
+9. **It keeps an audit log** (append-only JSON lines) of records, publications, outcomes and every change in who it
+   trusts (`trust-added` / `trust-removed`: user, account fingerprint, source), and **does not let the hub fill it**. Everything from the hub is bounded before it is written: at most 500 decisions are looked at per
    long-poll; a decision whose request id or envelope `kid` does not have the form the adapter and devices make is
    dropped unlogged; rejected decisions are logged (and, for a known request, acked) in a burst of 20 and then one
    per 6 s, separately for unknown requests and for ones that failed verification; whatever is dropped is summed up in
@@ -89,8 +91,14 @@ That gives the binary the same commands as every other adapter:
 interpose-adapter-mysvc key                          # make the signing key; prints the public key to register at the hub
 interpose-adapter-mysvc trust add-user USER ACCOUNT  # trust a user (account fingerprint read off their phone)
 interpose-adapter-mysvc trust list | remove-user USER
-interpose-adapter-mysvc run -id mysvc -hub https://hub.example [source flags]
+interpose-adapter-mysvc run -id mysvc -hub https://hub.example [trust flags] [source flags]
 ```
+
+Trust flags (`run` and `trust list`) choose where trusted users come from: `-trust local` (the default:
+`trusted-users.json`), `-trust ldap-group:<group>`, `-trust ldap-user:<uid>`, or several comma-separated, with
+`-ldap-url`, `-ldap-bind-dn`, `-ldap-bind-password-file`, `-ldap-user-base` and the rest. Each has an environment
+variable (`INTERPOSE_TRUST`, `LDAP_URL`, …) so a compose project's `.env` can carry it; the table is in
+[docs/runbooks/ldap.md](../docs/runbooks/ldap.md).
 
 The adapter directory (`-dir`, default `adapter-data`) holds `signing.key`, `hub-token` (from the hub's management UI),
 `trusted-users.json`, `trusted-heads.json`, `state.json` and `audit.jsonl`. Keep it private to the adapter.

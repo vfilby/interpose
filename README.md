@@ -38,6 +38,7 @@ All Go is one module (`go.mod` at the root), so `go test ./...` covers the hub a
 - Running the hub and adapters in Docker: [docs/docker.md](docs/docker.md)
 - Deploying end to end (hub, then an adapter): [docs/runbooks/deploy-clearing-house.md](docs/runbooks/deploy-clearing-house.md)
 - Hub sign-in with OIDC: [docs/runbooks/oidc.md](docs/runbooks/oidc.md)
+- Adapter trust from LDAP users and groups: [docs/runbooks/ldap.md](docs/runbooks/ldap.md)
 - iOS app: [ios/README.md](ios/README.md); TestFlight: [docs/runbooks/testflight.md](docs/runbooks/testflight.md)
 - Security model and reporting: [SECURITY.md](SECURITY.md)
 
@@ -79,8 +80,9 @@ addresses. Put real values in local configuration (`.env`, flags), never in the 
 
 Trust is per **user**. Each user has a device list (roster) signed by their own phones, and a new phone is approved on
 an existing one with Face ID. Each adapter trusts a user once:
-`interpose-adapter trust add-user <user> <account fingerprint>`. The hub hands out enrollment codes but cannot add a
-device to anyone.
+`interpose-adapter trust add-user <user> <account fingerprint>`, or, with a directory, by reading that fingerprint off
+the user's LDAP entry for the users and groups the adapter is told to trust ([docs/runbooks/ldap.md](docs/runbooks/ldap.md)).
+The hub hands out enrollment codes but cannot add a device to anyone.
 
 Status:
 - In use for Warpgate tickets, on LAN/VPN, with APNs wake-ups. Phase 1 (a single broker that sent Pushover links to

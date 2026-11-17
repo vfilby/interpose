@@ -36,8 +36,9 @@ Each adapter has its own deploy steps:
 - Warpgate: [adapters/warpgate/README.md](../../adapters/warpgate/README.md), "Deploying".
 
 They all end the same way: register the adapter's public key at the hub (**Adapters**), give the adapter the token
-the hub shows once, trust each user with `trust add-user <user> <account fingerprint>`, start it, and compare the
-adapter fingerprint on the phone (Device → **Check hub for new adapters**).
+the hub shows once, trust each user with `trust add-user <user> <account fingerprint>` (or point the adapter at LDAP
+users and groups carrying that fingerprint: [ldap.md](ldap.md)), start it, and compare the adapter fingerprint on the
+phone (Device → **Check hub for new adapters**).
 
 ## Updating
 

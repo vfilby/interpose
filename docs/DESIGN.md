@@ -32,6 +32,7 @@ Status (2026-10-04):
 | D14 | **Multi-user, option B.** Each user has a roster: a hash-chained list of their devices. Every version is signed by a device on the previous one, and the first by the first phone. Adding a phone means approving it (Face ID) on one already on the roster. Adapters pin **users** (user id + account fingerprint = hash of the first roster), not devices. They verify chains themselves and refuse rollbacks and forks. The hub hands out codes and stores chains, but cannot add a device. Supersedes D10. Deferred: a recovery key member, and per-user logins to the management UI. | 2026-10-03 |
 | D15 | **OIDC sign-in** (an OIDC provider such as Authelia) for the management UI and for phone sign-in. Members of `interpose_admins` are hub admins; everyone else gets self-service for their own account. The provider's two-factor `interpose` policy allows `interpose_users` and `interpose_admins`. Sign-in only gates who may start an enrollment; rosters still decide who can approve. Runbook: [runbooks/oidc.md](runbooks/oidc.md). | 2026-10-03 |
 | D16 | **Roster threshold stays one, for now (accepted risk).** Any one current device signs any next roster, removals included, so a phone stolen with its Face ID or app PIN owns the account until the hub admin deletes it. No recovery key, multi-signature removals or hub-gated roster updates yet; the options and when to revisit are in "Roster threshold" below. | 2026-10-06 |
+| D17 | **Adapter trust sources: local pins, LDAP users, LDAP groups**, per adapter, in any combination. The account fingerprint of an LDAP user lives on their directory entry, in an admin-only attribute, so it is pinned once for every adapter instead of once per adapter. Adapters read the directory themselves, read-only; the hub never does. Rosters and decision checks are unchanged, and every decision by an LDAP user asks the directory live (fail closed). **Accepted:** whoever controls the directory controls who approves at adapters that use it. See "LDAP trust sources" below; runbook: [runbooks/ldap.md](runbooks/ldap.md). | 2026-11-16 |
 
 ## Clearing house (2026-10-03)
 
@@ -107,8 +108,9 @@ fingerprint and pinned again at each adapter.
 **Decision: accept this for now.** What already limits it:
 - The approve key is in the Secure Enclave and needs Face ID or the app PIN. The PIN has an attempt limit, and the keys
   are deleted after 10 wrong PINs (see "Threats and mitigations").
-- Adapters trust only the users their operator pinned (`trust add-user`). An adapter's trust list is already the
-  per-adapter allowlist of who may approve there. A taken-over account reaches only the adapters that pinned it.
+- Adapters trust only the users their operator pinned (`trust add-user`), or named through an LDAP source (D17). An
+  adapter's trust list is already the per-adapter allowlist of who may approve there. A taken-over account reaches
+  only the adapters that pinned it.
 - Every roster posted is written to the hub's audit log (device, seq, member count). A phone that was removed says so
   in the app.
 - Phones and the hub are on LAN/VPN only (D13), so the attacker also needs to reach the hub.
@@ -131,6 +133,40 @@ Options, in the order they would be taken:
 
 Revisit when the hub's device API becomes reachable off the LAN (D13, option A), or when an account's phones are not
 all held by one person.
+
+### LDAP trust sources (D17)
+
+Pinning each user at each adapter by hand (`trust add-user`) is right for a few users and a few adapters, and it keeps
+every trust decision in the operator's hands. With a directory already deciding who is who (Authelia over LDAP, D15),
+the same pin can be kept there once.
+
+What was decided:
+- **The fingerprint is stored in LDAP, written by an admin.** A group tells an adapter *who* alice is, not *which
+  account* is hers; without the fingerprint the adapter would have to take the hub's word for it, which D9 removed. So
+  each user's entry carries `interposeAccount: <fingerprint>` (or `<hub user id> <fingerprint>` when the hub knows them
+  under another id), in an attribute users cannot edit. The fingerprint is public (the hub and every phone show it), so
+  who can *read* it does not matter; who can *write* it does.
+- **Adapters read the directory themselves**, each with its own read-only bind, over LDAPS or StartTLS (plain only
+  on a private Docker network, and the adapter warns). The hub gets no LDAP credentials: groups the hub sees through
+  OIDC are the hub's claim and are never used to authorize.
+- **Sources are per adapter and combine**: `local`, `ldap-user:<uid>`, `ldap-group:<group>`. A user named twice with
+  the same fingerprint is pinned once; named with two different fingerprints, not at all until the sources agree.
+- **Rosters do not change.** An LDAP pin is verified against the user's roster chain exactly as a local one: wrong
+  fingerprint, no trust. Verified heads are kept on disk for users not pinned right now, so a user pinned again (after
+  an outage, or a restart) takes up the head last verified and the hub cannot offer an older one.
+- **Every decision asks the directory live**, after the signature verifies and before the service is re-read: the
+  user must still be named by their source, with the same fingerprint. Any directory error refuses the decision. The
+  cached read (every minute by default) only decides whose phones get a request. So leaving a group takes effect at
+  the next decision, and the cache never widens who may approve.
+- **Audited**: `trust-added` / `trust-removed` with user, fingerprint and source (the whole list at each start), the
+  source in the outcome of a decision, and the reason for every refusal.
+- **Rejected: trust on first use from the hub.** It would have let a hostile hub choose the account the first time
+  the adapter saw each user; once is enough.
+
+What it costs, said plainly in SECURITY.md: a compromised directory can approve at every adapter that uses it,
+because it can rewrite a fingerprint or add a member. Without LDAP sources the directory can do nothing to an adapter.
+The dependency on go-ldap (with asn1-ber, uuid and x/crypto) is the first non-standard-library code on the adapter
+side.
 
 ### Next adapters
 
