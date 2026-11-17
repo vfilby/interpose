@@ -159,7 +159,6 @@ type Trust struct {
 	ldapPins  []Pin     // last read from the directory, every source together
 	ldapAt    time.Time // when ldapPins were last read successfully
 	ldapTried time.Time
-	ldapErrs  []error // problems from the last read, repeated until the next one
 
 	pins   []Pin                          // in force: local and LDAP pins merged
 	chains map[string][]protocol.Envelope // user -> newest verified chain
@@ -408,10 +407,9 @@ func (t *Trust) refreshDirectory(ctx context.Context) []error {
 	now := t.opts.Now()
 	t.mu.RLock()
 	due := t.ldapTried.IsZero() || now.Sub(t.ldapTried) >= t.opts.Refresh
-	last := t.ldapErrs
 	t.mu.RUnlock()
 	if !due {
-		return last
+		return nil // problems are reported once per read, not once per poll
 	}
 	pins, errs, read := t.readDirectory(ctx) // over the network: not under the lock
 	t.mu.Lock()
@@ -424,7 +422,6 @@ func (t *Trust) refreshDirectory(ctx context.Context) []error {
 		errs = append(errs, fmt.Errorf("directory unreadable since %s: its users are set aside until it answers", t.ldapAt.Format(time.RFC3339)))
 		t.ldapPins = nil
 	}
-	t.ldapErrs = errs
 	t.merge()
 	return errs
 }
